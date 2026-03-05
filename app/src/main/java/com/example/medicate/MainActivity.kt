@@ -1,9 +1,29 @@
+/*
+ * Copyright (C) 2024 setia
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
 package com.example.medicate
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,14 +57,17 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
@@ -52,60 +75,143 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.room.Dao
+import androidx.room.Database
+import androidx.room.Entity
+import androidx.room.Insert
+import androidx.room.PrimaryKey
+import androidx.room.Query
+import androidx.room.Room
+import androidx.room.RoomDatabase
 import com.example.medicate.ui.theme.MedicateTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-// Colors
-val AmoledBlack = Color(0xFF000000)
+// --- DATABASE SETUP ---
 
-// Data class to hold our meditation records
+@Entity(tableName = "sessions")
 data class MeditationSession(
-    val id: Long,
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val durationSeconds: Long,
     val timestamp: Long
 )
 
+@Dao
+interface SessionDao {
+    @Query("SELECT * FROM sessions ORDER BY timestamp DESC")
+    fun getAllSessions(): Flow<List<MeditationSession>>
+
+    @Insert
+    suspend fun insertSession(session: MeditationSession): Long
+}
+
+@Database(entities = [MeditationSession::class], version = 1)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun sessionDao(): SessionDao
+}
+
+// --- APP CODE ---
+
+val AmoledBlack = Color(0xFF000000)
+
 class MainActivity : ComponentActivity() {
+    private val db by lazy {
+        Room.databaseBuilder(
+            applicationContext,
+            AppDatabase::class.java, "medicate-db"
+        ).build()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             MedicateTheme {
+                var showSplash by remember { mutableStateOf(true) }
                 var currentScreen by remember { mutableStateOf("timer") }
-                val sessionLogs = remember { mutableStateListOf<MeditationSession>() }
+                
+                val sessionLogs by db.sessionDao().getAllSessions().collectAsState(initial = emptyList())
+                val scope = rememberCoroutineScope()
 
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    containerColor = AmoledBlack
-                ) { innerPadding ->
-                    Box(modifier = Modifier.padding(innerPadding)) {
-                        if (currentScreen == "timer") {
-                            TimerScreen(
-                                onNavigateToLogs = { currentScreen = "logs" },
-                                onSaveSession = { duration ->
-                                    if (duration > 0) {
-                                        sessionLogs.add(0, MeditationSession(
-                                            id = System.currentTimeMillis(),
-                                            durationSeconds = duration,
-                                            timestamp = System.currentTimeMillis()
-                                        ))
+                if (showSplash) {
+                    SplashScreen(onSplashFinished = { showSplash = false })
+                } else {
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        containerColor = AmoledBlack
+                    ) { innerPadding ->
+                        Box(modifier = Modifier.padding(innerPadding)) {
+                            if (currentScreen == "timer") {
+                                TimerScreen(
+                                    onNavigateToLogs = { currentScreen = "logs" },
+                                    onSaveSession = { duration ->
+                                        if (duration > 0) {
+                                            scope.launch {
+                                                db.sessionDao().insertSession(
+                                                    MeditationSession(
+                                                        durationSeconds = duration,
+                                                        timestamp = System.currentTimeMillis()
+                                                    )
+                                                )
+                                            }
+                                        }
                                     }
-                                }
-                            )
-                        } else {
-                            LogsScreen(
-                                logs = sessionLogs,
-                                onNavigateToTimer = { currentScreen = "timer" }
-                            )
+                                )
+                            } else {
+                                LogsScreen(
+                                    logs = sessionLogs,
+                                    onNavigateToTimer = { currentScreen = "timer" }
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+fun SplashScreen(onSplashFinished: () -> Unit) {
+    var splashText by remember { mutableStateOf("medicate") }
+    val alpha = remember { Animatable(0f) }
+
+    LaunchedEffect(Unit) {
+        // Phase 1: medicate
+        alpha.animateTo(1f, animationSpec = tween(1000))
+        delay(1000)
+        alpha.animateTo(0f, animationSpec = tween(1000))
+        
+        // Phase 2: meditate
+        splashText = "meditate"
+        alpha.animateTo(1f, animationSpec = tween(1000))
+        delay(1000)
+        alpha.animateTo(0f, animationSpec = tween(1000))
+        
+        onSplashFinished()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AmoledBlack),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = splashText,
+            color = Color.White,
+            fontSize = 42.sp,
+            fontWeight = FontWeight.Light,
+            modifier = Modifier.alpha(alpha.value),
+            letterSpacing = 8.sp
+        )
     }
 }
 
@@ -194,7 +300,6 @@ fun LogsScreen(
             .padding(top = 60.dp, start = 24.dp, end = 24.dp, bottom = 40.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Tab Row with inverted border logic
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -234,7 +339,6 @@ fun TabItem(text: String, isSelected: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(width = 90.dp, height = 45.dp)
-            // If SELECTED -> No Border. If NOT SELECTED -> White Border.
             .then(
                 if (!isSelected) {
                     Modifier.border(BorderStroke(1.dp, Color.White), RectangleShape)
@@ -278,7 +382,7 @@ fun WeekView(logs: List<MeditationSession>) {
     val weeklyData = remember(logs) {
         val calendar = Calendar.getInstance()
         calendar.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
-        (0..6).map { i ->
+        (0..6).map { _ ->
             val d = calendar.timeInMillis
             val totalSecs = logs.filter { isSameDay(it.timestamp, d) }.sumOf { it.durationSeconds }
             calendar.add(Calendar.DAY_OF_YEAR, 1)
@@ -324,23 +428,57 @@ fun WeekView(logs: List<MeditationSession>) {
 @Composable
 fun MonthView(logs: List<MeditationSession>) {
     var selectedDate by remember { mutableStateOf<Long?>(null) }
-    val calendar = remember { Calendar.getInstance() }
+    var displayedMonth by remember { mutableStateOf(Calendar.getInstance()) }
+
+    val calendar = (displayedMonth.clone() as Calendar).apply { set(Calendar.DAY_OF_MONTH, 1) }
     val currentMonth = calendar.get(Calendar.MONTH)
     val currentYear = calendar.get(Calendar.YEAR)
     
-    calendar.set(Calendar.DAY_OF_MONTH, 1)
     val firstDayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
     val daysInMonth = calendar.getActualMaximum(Calendar.DAY_OF_MONTH)
     val emptyDays = if (firstDayOfWeek == Calendar.SUNDAY) 6 else firstDayOfWeek - 2
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(
-            text = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(calendar.time),
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center
-        )
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "<",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 24.sp,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .clickable {
+                        val newCal = displayedMonth.clone() as Calendar
+                        newCal.add(Calendar.MONTH, -1)
+                        displayedMonth = newCal
+                        selectedDate = null
+                    }
+            )
+            Text(
+                text = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(calendar.time),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = ">",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 24.sp,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .clickable {
+                        val newCal = displayedMonth.clone() as Calendar
+                        newCal.add(Calendar.MONTH, 1)
+                        displayedMonth = newCal
+                        selectedDate = null
+                    }
+            )
+        }
         
         Spacer(Modifier.height(16.dp))
 
@@ -456,8 +594,7 @@ fun LogsPreview() {
     MedicateTheme {
         LogsScreen(
             logs = listOf(
-                MeditationSession(1, 600, System.currentTimeMillis()),
-                MeditationSession(2, 300, System.currentTimeMillis() - 86400000)
+                MeditationSession(1, 600, System.currentTimeMillis())
             ),
             onNavigateToTimer = {}
         )
