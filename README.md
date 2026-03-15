@@ -1,4 +1,4 @@
-Medicate Meditate is a local-first application. All data is stored on your device and is never transmitted to the developer or any third party.
+Meditate Medicate is a local-first application. All data is stored on your device and is never transmitted to the developer or any third party.
 
 
 <img width="360" height="719" alt="image" src="https://github.com/user-attachments/assets/eccda1bf-91b0-41b3-a2a2-7aeaa9975ddb" />
